@@ -556,6 +556,11 @@ body.telao .pillars.three .pillar h3{font-size:22px}
 .verbs i{font-style:normal; color:var(--log-hot); font-family:var(--mono)}
 .verbs b{margin-left:auto; color:var(--log-hot); font-size:15px}
 @media (max-width:900px){ .eras{grid-template-columns:1fr} .era-arrow{transform:rotate(90deg)} .segpick{grid-template-columns:1fr 1fr} }
+.prog-wrap{position:absolute; left:0; right:0; bottom:0; height:4px; background:transparent; z-index:5}
+.prog-wrap i{display:block; height:100%; width:0; background:var(--accent); transition:width .35s ease}
+.prog-wrap span{position:absolute; right:12px; bottom:8px; font-family:var(--mono); font-size:11px; color:var(--ink-2); opacity:.7}
+.black{position:fixed; inset:0; background:#000; z-index:100; display:none}
+body.blackout .black{display:block}
 
 </style>
 </head><body>
@@ -578,7 +583,9 @@ body.telao .pillars.three .pillar h3{font-size:22px}
     </div>
   </header>
   <main id="app"></main>
+  <div class="prog-wrap" aria-hidden="true"><i id="progress"></i><span id="progN"></span></div>
 </div></div>
+<div class="black" aria-hidden="true"></div>
 <script>
 const PROD = {mkt:["RD Station Marketing","p-mkt"], crm:["RD Station CRM","p-crm"], cnv:["RD Station Conversas","p-cnv"], suri:["Suri Shop","p-cnv"], omni:["Isthmus Omni","p-omni"], exact:["Exact Sales","p-crm"], ia:["IA para Negociações","p-crm"]};
 const SEGS={};
@@ -2007,9 +2014,9 @@ function toggleFlip(key){
   if(!key) key = reveal>=3 ? 'sol' : (reveal>=2 ? 'gap' : null);
   const fw=app.querySelector(`.flipwrap[data-key="${key}"]`); if(!fw) return;
   if(key==='gap' && reveal<2) return; if(key==='sol' && reveal<3) return;
-  if(flipped===key){ flipped=null; unflipNow(fw); return; }
+  if(flipped===key){ flipped=null; unflipNow(fw); paintProgress(); return; }
   if(flipped){ const o=app.querySelector(`.flipwrap[data-key="${flipped}"]`); flipped=null; if(o) unflipNow(o); }
-  flipped=key;
+  flipped=key; setTimeout(paintProgress,0);
   fw.classList.add('showback');
   requestAnimationFrame(()=>requestAnimationFrame(()=>fw.classList.add('flipped')));
   setTimeout(()=>fw.scrollIntoView({behavior:'smooth',block:'nearest'}),200);
@@ -2265,8 +2272,9 @@ function openSolution(i){
   m.querySelector('#scPrev').onclick=()=>openSolution((i-1+SOLS.length)%SOLS.length);
   m.querySelector('#scNext').onclick=()=>openSolution((i+1)%SOLS.length);
   m.querySelector('#scClose').focus();
+  paintProgress();
 }
-function closeSol(){ const m=document.getElementById('solModal'); if(m){m.hidden=true; m.innerHTML='';} openSol=null; if(lastFocus&&lastFocus.focus) lastFocus.focus(); }
+function closeSol(){ const m=document.getElementById('solModal'); if(m){m.hidden=true; m.innerHTML='';} openSol=null; if(lastFocus&&lastFocus.focus) lastFocus.focus(); paintProgress(); }
 
 /* ---------- navegação ---------- */
 function render(){
@@ -2274,26 +2282,65 @@ function render(){
   document.body.classList.toggle('mode-b2b', view==='b2b');
   document.querySelectorAll('.tabs button').forEach(b=>b.setAttribute('aria-selected', b.dataset.view===view));
   ({intro:renderIntro, rd:renderRD, cmp:renderCmp, flow:renderFlow, plan:renderPlan}[view] || renderJourney)();
+  paintProgress();
 }
 function setView(v){ if(!seg && v!=='intro'){ view='intro'; islide=0; render(); nudge(); return; } view=v; stage=0; reveal=1; flipped=null; if(v==='intro') islide=0; render(); window.scrollTo({top:0});}
 const ORDER=['intro','rd','b2c','b2b','cmp','flow','plan'];
-function next(){
-  if(view==='intro'){ if(!seg){nudge(); return;} if(islide<INTRO.length-1){islide++; render(); return;} }
-  if(view==='b2c'||view==='b2b'){
-    if(reveal<3){reveal++; flipped=null; render(); return;}
-    if(stage<3){stage++; reveal=1; flipped=null; render(); return;}
+/* ---------- roteiro linear: um único "próximo" percorre tudo ---------- */
+function buildSteps(){
+  const st=[]; const n=introSlides().length;
+  for(let i=0;i<n;i++) st.push({view:'intro',islide:i});
+  st.push({view:'rd',sol:null});
+  SOLS.forEach((_,i)=>st.push({view:'rd',sol:i}));
+  ['b2c','b2b'].forEach(v=>{ for(let s=0;s<4;s++){
+    st.push({view:v,stage:s,reveal:1,flipped:null});
+    st.push({view:v,stage:s,reveal:2,flipped:null});
+    st.push({view:v,stage:s,reveal:2,flipped:'gap'});
+    st.push({view:v,stage:s,reveal:3,flipped:null});
+    st.push({view:v,stage:s,reveal:3,flipped:'sol'});
+  }});
+  st.push({view:'cmp'},{view:'flow'},{view:'plan'});
+  return st;
+}
+function curStep(st){
+  const isJ=view==='b2c'||view==='b2b';
+  let i=st.findIndex(x=>x.view===view && (view!=='intro'||x.islide===islide) && (view!=='rd'||x.sol===openSol) && (!isJ||(x.stage===stage&&x.reveal===reveal&&x.flipped===flipped)));
+  if(i<0) i=st.findIndex(x=>x.view===view && (!isJ||(x.stage===stage&&x.reveal===Math.min(reveal,3))));
+  if(i<0) i=st.findIndex(x=>x.view===view);
+  return Math.max(i,0);
+}
+function goStep(x){
+  const isJ=x.view==='b2c'||x.view==='b2b';
+  if(x.view==='rd'){ if(view!=='rd'){ if(openSol!==null) closeSol(); view='rd'; stage=0; reveal=1; flipped=null; render(); window.scrollTo({top:0}); }
+    if(x.sol===null){ if(openSol!==null) closeSol(); } else openSolution(x.sol);
+    paintProgress(); return; }
+  if(openSol!==null) closeSol();
+  if(isJ && view===x.view && stage===x.stage && reveal===x.reveal && flipped!==x.flipped){
+    toggleFlip(x.flipped||flipped); paintProgress(); return;     /* gira o card com animação */
   }
-  const i=ORDER.indexOf(view); if(i<ORDER.length-1) setView(ORDER[i+1]);
+  view=x.view;
+  if(x.view==='intro') islide=x.islide;
+  if(isJ){ stage=x.stage; reveal=x.reveal; flipped=x.flipped; } else { stage=0; reveal=1; flipped=null; }
+  render(); window.scrollTo({top:0});
+}
+function next(){
+  if(view==='intro' && !seg){ setSeg('geral'); return; }
+  const st=buildSteps(), i=curStep(st);
+  if(i<st.length-1) goStep(st[i+1]);
 }
 function prev(){
-  if(view==='intro'){ if(islide>0){islide--; render();} return; }
-  if(view==='b2c'||view==='b2b'){
-    if(flipped){toggleFlip(flipped); return;}
-    if(reveal>1){reveal--; render(); return;}
-    if(stage>0){stage--; reveal=3; render(); return;}
-  }
-  const i=ORDER.indexOf(view); if(i>0){view=ORDER[i-1]; stage=0; reveal=1; flipped=null; if(view==='b2c'||view==='b2b'){stage=3; reveal=3;} if(view==='intro') islide=introSlides().length-1; render();}
+  if(!seg) return;
+  const st=buildSteps(), i=curStep(st);
+  if(i>0) goStep(st[i-1]);
 }
+function paintProgress(){
+  const bar=document.getElementById('progress'); if(!bar) return;
+  if(!seg){ bar.style.width='0'; document.getElementById('progN').textContent=''; return; }
+  const st=buildSteps(), i=curStep(st);
+  bar.style.width=((i+1)/st.length*100)+'%';
+  document.getElementById('progN').textContent=`${i+1} / ${st.length}`;
+}
+function toggleBlack(){ document.body.classList.toggle('blackout'); }
 
 /* tema */
 const root=document.documentElement;
@@ -2308,16 +2355,18 @@ paintThemeBtn();
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>setView(b.dataset.view));
 document.getElementById('segBtn').onclick=()=>setView('intro');
 document.addEventListener('keydown',e=>{
-  if(openSol!==null){ if(e.key==='Escape') closeSol(); else if(e.key==='ArrowRight') openSolution((openSol+1)%SOLS.length); else if(e.key==='ArrowLeft') openSolution((openSol-1+SOLS.length)%SOLS.length); return; }
   if(e.target.closest && e.target.closest('input,textarea')) return;
-  if(e.key==='ArrowRight'){e.preventDefault(); next();}
-  else if(e.key==='ArrowLeft'){prev();}
-  else if(['1','2','3','4','5','6','7'].includes(e.key)) setView(ORDER[+e.key-1]);
-  else if(e.key==='g'||e.key==='G'){ if(view==='b2c'||view==='b2b') toggleFlip(); }
-  else if(e.key==='t'||e.key==='T') toggleTheme();
-  else if(e.key==='f'||e.key==='F') toggleFS();
+  const k=e.key;
+  if(document.body.classList.contains('blackout') && !['b','B','.'].includes(k)){ toggleBlack(); e.preventDefault(); return; }
+  if(['ArrowRight','ArrowDown','PageDown',' ','Spacebar','Enter','n','N'].includes(k)){ e.preventDefault(); if(document.activeElement&&document.activeElement.blur) document.activeElement.blur(); next(); }
+  else if(['ArrowLeft','ArrowUp','PageUp','Backspace','p','P'].includes(k)){ e.preventDefault(); prev(); }
+  else if(k==='Escape'){ if(openSol!==null) closeSol(); }
+  else if(['b','B','.'].includes(k)){ e.preventDefault(); toggleBlack(); }
+  else if(['1','2','3','4','5','6','7'].includes(k)) setView(ORDER[+k-1]);
+  else if(k==='g'||k==='G'){ if(view==='b2c'||view==='b2b') toggleFlip(); }
+  else if(k==='t'||k==='T') toggleTheme();
+  else if(k==='f'||k==='F') toggleFS();
 });
-
 seg=loadSeg(); paintChrome();
 document.body.classList.add('telao');
 function fitStage(){ const k=Math.min(innerWidth/1920, innerHeight/1080); document.getElementById('stage').style.setProperty('--k',k); }
